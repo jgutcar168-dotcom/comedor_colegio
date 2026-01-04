@@ -1,0 +1,6 @@
+streamlit
+pandas
+streamlit-gsheets
+xhtml2pdf
+jinja2
+supabase==2.4.0

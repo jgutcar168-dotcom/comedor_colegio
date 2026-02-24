@@ -339,7 +339,7 @@ if diario == "📋 Pasar lista":
         
         # --- SEPARACIÓN DE ALUMNOS ---
         # 1. Alumnos de Comedor Normal
-        alumnos_comedor = alumnos_curso[alumnos_curso["solo_pt_al"] == False]
+        alumnos_comedor = alumnos_curso[alumnos_curso["solo_pt_al"] != True]
         # 2. Alumnos Solo PT/AL (No comen)
         alumnos_solo_pt = alumnos_curso[alumnos_curso["solo_pt_al"] == True]
 
@@ -2350,3 +2350,4 @@ if rol == "admin":
                         supabase.table("maestros_agua").insert(filas_insertar).execute()
 
                     st.success("Consumo de agua de maestros guardado correctamente.")
+

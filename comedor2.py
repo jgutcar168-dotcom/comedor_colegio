@@ -2204,41 +2204,46 @@ if rol == "admin":
                     if volver_a_promocionar:
                         st.session_state.promocion_estado[alumno_id] = True
 
-        if st.button("Aplicar promoción"):
-            st.warning("Esta acción actualizará el curso de todos los alumnos seleccionados. ¿Deseas continuar?")
+        # --- REEMPLAZAR DESDE "Aplicar promoción" HASTA EL ST.DIVIDER() ---
+        st.subheader("Confirmación de promoción")
+        
+        confirmar_promo = st.checkbox("⚠️ Confirmo que deseo actualizar el curso de todos los alumnos seleccionados")
 
-            col1, col2 = st.columns(2)
+        if st.button("🚀 Aplicar promoción ahora", type="primary", disabled=not confirmar_promo):
+            with st.spinner("Actualizando cursos de los alumnos en la base de datos..."):
+                try:
+                    seleccionados = datos_promocionables[
+                        datos_promocionables["id"].apply(lambda x: st.session_state.promocion_estado[x])
+                    ]
 
-            with col1:
-                confirmar = st.button("Sí, confirmar promoción")
+                    for _, row in seleccionados.iterrows():
+                        # Registramos el movimiento en el historial
+                        db_insert("promociones_log", [{
+                            "alumno_id": row["id"],
+                            "curso_origen": row["curso_id"],
+                            "curso_destino": row["curso_destino_id"],
+                            "fecha": datetime.now().strftime("%Y-%m-%d")
+                        }])
 
-            with col2:
-                cancelar = st.button("Cancelar")
+                        # Actualizamos el curso real del alumno
+                        db_upsert("alumnos", [{
+                            "id": row["id"],
+                            "curso_id": row["curso_destino_id"]
+                        }])
 
-            if confirmar:
+                    # 🔑 CLAVE: Borramos la caché para que Streamlit lea los nuevos cursos de Supabase
+                    st.cache_data.clear()
+                    
+                    # Limpiamos el estado guardado de los checkboxes
+                    if "promocion_estado" in st.session_state:
+                        del st.session_state["promocion_estado"]
 
-                seleccionados = datos_promocionables[
-                    datos_promocionables["id"].apply(lambda x: st.session_state.promocion_estado[x])
-                ]
+                    st.success("✅ Promoción aplicada con éxito. Los alumnos han sido movidos a sus nuevos cursos.")
+                    st.balloons()
+                    st.rerun()
 
-                for _, row in seleccionados.iterrows():
-
-                    db_insert("promociones_log", [{
-                        "alumno_id": row["id"],
-                        "curso_origen": row["curso_id"],
-                        "curso_destino": row["curso_destino_id"],
-                        "fecha": datetime.now().strftime("%Y-%m-%d")
-                    }])
-
-                    db_upsert("alumnos", [{
-                        "id": row["id"],
-                        "curso_id": row["curso_destino_id"]
-                    }])
-
-                st.success("Promoción aplicada correctamente.")
-
-            elif cancelar:
-                st.info("Promoción cancelada.")
+                except Exception as e:
+                    st.error(f"Error al aplicar la promoción: {e}")
 
         st.divider()
 

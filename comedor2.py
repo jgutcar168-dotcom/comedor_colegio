@@ -2217,12 +2217,12 @@ if rol == "admin":
                     ]
 
                     for _, row in seleccionados.iterrows():
-                        # Convertimos los IDs a enteros puros para evitar decimales (.0)
+                        # Convertimos los IDs a enteros puros
                         a_id = int(row["id"])
                         c_origen = int(row["curso_id"])
                         c_destino = int(row["curso_destino_id"])
 
-                        # Registramos el movimiento en el historial
+                        # 1. Registro en el historial SIN incluir la columna "id"
                         db_insert("promociones_log", [{
                             "alumno_id": a_id,
                             "curso_origen": c_origen,
@@ -2230,12 +2230,12 @@ if rol == "admin":
                             "fecha": datetime.now().strftime("%Y-%m-%d")
                         }])
 
-                        # Actualizamos el curso real del alumno
+                        # 2. Actualizamos el curso real del alumno
                         db_upsert("alumnos", [{
                             "id": a_id,
                             "curso_id": c_destino
                         }])
-
+                        
                     # 🔑 CLAVE: Borramos la caché para que Streamlit lea los nuevos cursos de Supabase
                     st.cache_data.clear()
                     

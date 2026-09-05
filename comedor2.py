@@ -2214,27 +2214,15 @@ if rol == "admin":
                 try:
                     seleccionados = datos_promocionables[
                         datos_promocionables["id"].apply(lambda x: st.session_state.promocion_estado[x])
-                    ].copy()
+                    ]
 
-                    # 1. Filtramos para asegurarnos de que no haya curso_destino_id nulo (NaN)
-                    alumnos_invalidos = seleccionados[seleccionados["curso_destino_id"].isna()]
-                    if not alumnos_invalidos.empty:
-                        nombres = ", ".join(alumnos_invalidos["nombre"].tolist())
-                        st.error(f"❌ Los siguientes alumnos tienen un curso de destino no encontrado en Supabase: {nombres}. Revisa los nombres de la tabla 'cursos'.")
-                        st.stop()
-
-                    # 2. Convertimos los IDs a enteros seguros
-                    seleccionados["id"] = seleccionados["id"].astype(int)
-                    seleccionados["curso_id"] = seleccionados["curso_id"].astype(int)
-                    seleccionados["curso_destino_id"] = seleccionados["curso_destino_id"].astype(int)
-
-                    # 3. Aplicamos los cambios en Supabase
                     for _, row in seleccionados.iterrows():
+                        # Convertimos los IDs a enteros puros
                         a_id = int(row["id"])
                         c_origen = int(row["curso_id"])
                         c_destino = int(row["curso_destino_id"])
 
-                        # Insertar en el historial
+                        # 1. Insertar en el historial de promociones
                         supabase.table("promociones_log").insert([{
                             "alumno_id": a_id,
                             "curso_origen": c_origen,
@@ -2242,13 +2230,15 @@ if rol == "admin":
                             "fecha": datetime.now().strftime("%Y-%m-%d")
                         }]).execute()
 
-                        # Actualizar el curso del alumno
+                        # 2. Actualizar el curso del alumno existente (usando UPDATE en lugar de UPSERT)
                         supabase.table("alumnos").update({
                             "curso_id": c_destino
-                        }).eq("id", a_id).execute()
-
-                    # 4. Limpieza de memoria y refresco
+                    }).eq("id", a_id).execute()
+                        
+                    # 🔑 CLAVE: Borramos la caché para que Streamlit lea los nuevos cursos de Supabase
                     st.cache_data.clear()
+                    
+                    # Limpiamos el estado guardado de los checkboxes
                     if "promocion_estado" in st.session_state:
                         del st.session_state["promocion_estado"]
 

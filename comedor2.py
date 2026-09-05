@@ -2222,19 +2222,18 @@ if rol == "admin":
                         c_origen = int(row["curso_id"])
                         c_destino = int(row["curso_destino_id"])
 
-                        # 1. Registro en el historial SIN incluir la columna "id"
-                        db_insert("promociones_log", [{
+                        # 1. Insertar en el historial de promociones
+                        supabase.table("promociones_log").insert([{
                             "alumno_id": a_id,
                             "curso_origen": c_origen,
                             "curso_destino": c_destino,
                             "fecha": datetime.now().strftime("%Y-%m-%d")
-                        }])
+                        }]).execute()
 
-                        # 2. Actualizamos el curso real del alumno
-                        db_upsert("alumnos", [{
-                            "id": a_id,
+                        # 2. Actualizar el curso del alumno existente (usando UPDATE en lugar de UPSERT)
+                        supabase.table("alumnos").update({
                             "curso_id": c_destino
-                        }])
+                        }).eq("id", a_id).execute()
                         
                     # 🔑 CLAVE: Borramos la caché para que Streamlit lea los nuevos cursos de Supabase
                     st.cache_data.clear()

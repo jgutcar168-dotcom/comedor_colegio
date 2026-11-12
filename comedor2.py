@@ -1468,7 +1468,7 @@ if rol == "admin":
                 )
     
         # =========================
-        # INFORME MENSUAL (CARGA TOTAL FORZADA)
+        # INFORME MENSUAL (CARGA TOTAL FORZADA - SOLO DÍAS LECTIVOS)
         # =========================
         st.subheader("Informe Mensual")
         col_m, col_a = st.columns(2)
@@ -1500,28 +1500,27 @@ if rol == "admin":
             if df_asis_mes.empty:
                 st.warning(f"No hay registros de asistencia para el mes {mes}/{año}")
             else:
-                # 3. PREPARAR MAPEOS
-                # Diccionario Alumno -> Curso ID
+                # 3. PREPARAR MAPEOS Y FILTRAR DÍAS LECTIVOS (Lunes=0 a Viernes=4)
+                dias_lectivos = [d for d in range(1, dias_mes + 1) if datetime(año, mes, d).weekday() < 5]
+                num_dias_lectivos = len(dias_lectivos)
+
                 dict_alu_curso = {str(k): str(v) for k, v in zip(df_alumnos_fresco["id"], df_alumnos_fresco["curso_id"])}
-                # Cursos válidos (excluyendo 'ninguno')
                 df_cur_filt = df_cursos_fresco[df_cursos_fresco["nombre"].str.lower() != "ninguno"].copy()
                 df_cur_filt = df_cur_filt.sort_values("nombre")
 
-                # 4. CONSTRUIR MATRIZ (Curso x Días)
-                tabla_data = [["Curso"] + [str(d) for d in range(1, dias_mes+1)] + ["Total"]]
-                totales_diarios = [0] * dias_mes
+                # 4. CONSTRUIR MATRIZ (Curso x Días Lectivos)
+                tabla_data = [["Curso"] + [str(d) for d in dias_lectivos] + ["Total"]]
+                totales_diarios = [0] * num_dias_lectivos
 
                 for _, curso in df_cur_filt.iterrows():
                     id_curso_str = str(curso["id"])
                     fila = [curso["nombre"]]
                     total_curso = 0
 
-                    for d in range(1, dias_mes+1):
+                    for idx_d, d in enumerate(dias_lectivos):
                         f_busqueda = f"{año}-{mes:02d}-{d:02d}"
-                        # Buscamos en los datos del mes
                         asis_dia = df_asis_mes[df_asis_mes["fecha"] == f_busqueda]
                         
-                        # Contamos cuántos alumnos de este curso aparecen en la asistencia de ese día
                         count = 0
                         for alu_id in asis_dia["alumno_id"]:
                             if dict_alu_curso.get(str(alu_id)) == id_curso_str:
@@ -1529,7 +1528,7 @@ if rol == "admin":
                         
                         fila.append(count if count > 0 else "")
                         total_curso += count
-                        totales_diarios[d-1] += count
+                        totales_diarios[idx_d] += count
                     
                     fila.append(total_curso)
                     tabla_data.append(fila)
@@ -1547,12 +1546,11 @@ if rol == "admin":
                 c.setFont("Helvetica-Bold", 18)
                 c.drawCentredString(page_width/2, page_height - 110, f"INFORME MENSUAL DE COMENSALES - {mes}/{año}")
 
-                # Ajuste de tamaño de fuente
-                fontSize = 8 if dias_mes > 30 else 9
+                fontSize = 9
                 
-                # Calculamos anchos: Nombre curso (80), días (20 aprox), total (40)
-                anchos_dias = (page_width - 150) / dias_mes
-                tabla = Table(tabla_data, colWidths=[85] + [anchos_dias]*dias_mes + [45])
+                # Calculamos anchos usando num_dias_lectivos
+                anchos_dias = (page_width - 150) / num_dias_lectivos
+                tabla = Table(tabla_data, colWidths=[85] + [anchos_dias]*num_dias_lectivos + [45])
                 
                 estilo = [
                     ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
@@ -1565,7 +1563,6 @@ if rol == "admin":
                     ("VALIGN", (0,0), (-1,-1), "MIDDLE"),
                 ]
                 
-                # Sombreado alterno para las filas de cursos
                 for i in range(1, len(tabla_data)-1):
                     if i % 2 == 0:
                         estilo.append(("BACKGROUND", (0,i), (-1,i), colors.whitesmoke))
@@ -1573,7 +1570,6 @@ if rol == "admin":
                 tabla.setStyle(TableStyle(estilo))
                 
                 w, h = tabla.wrap(0, 0)
-                # Centramos la tabla en la página
                 tabla.drawOn(c, (page_width - w)/2, page_height - 160 - h)
 
                 add_page_number(c)
@@ -1588,7 +1584,7 @@ if rol == "admin":
                     use_container_width=True
                 )
         # =========================================================
-        # INFORME DE FALTAS (OPTIMIZADO Y SIN ERRORES)
+        # INFORME DE FALTAS (OPTIMIZADO Y SIN FINES DE SEMANA)
         # =========================================================
         st.subheader("Informe de Faltas")
 
@@ -1618,8 +1614,11 @@ if rol == "admin":
                     .eq("asiste", False)\
                     .execute()
                 
-                # Crear un set de búsqueda rápida: {(alumno_id, fecha), ...}
                 faltas_set = {(str(r['alumno_id']), r['fecha']) for r in res_faltas.data}
+
+            # Filtrar solo días lectivos (Lunes=0 a Viernes=4)
+            dias_lectivos = [d for d in range(1, dias_mes + 1) if datetime(año_f, mes_f, d).weekday() < 5]
+            num_dias_lectivos = len(dias_lectivos)
 
             # 3. Filtrar cursos a procesar
             if curso_f_nombre == "Todos los cursos":
@@ -1632,7 +1631,6 @@ if rol == "admin":
             page_width, page_height = landscape(A4)
 
             for i, curso in enumerate(cursos_a_procesar):
-                # Filtrar alumnos de este curso
                 alumnos_este_curso = df_alu_f[df_alu_f["curso_id"] == curso["id"]].sort_values("nombre")
                 
                 if alumnos_este_curso.empty and curso_f_nombre == "Todos los cursos":
@@ -1647,8 +1645,8 @@ if rol == "admin":
                 c.setFont("Helvetica-Bold", 13)
                 c.drawString(40, page_height - 140, f"Curso: {curso['nombre']}")
 
-                # Cabecera de tabla
-                tabla_data = [["Alumno"] + [str(d) for d in range(1, dias_mes+1)] + ["Total"]]
+                # Cabecera de tabla solo con días lectivos
+                tabla_data = [["Alumno"] + [str(d) for d in dias_lectivos] + ["Total"]]
                 
                 # Estilos base
                 estilos = [
@@ -1657,9 +1655,9 @@ if rol == "admin":
                     ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
                     ("ALIGN", (0,0), (-1,-1), "CENTER"),
                     ("ALIGN", (0,0), (0,-1), "LEFT"),
-                    ("FONTSIZE", (0,0), (-1,-1), 7),
-                    ("LEFTPADDING", (0,0), (-1,-1), 1),
-                    ("RIGHTPADDING", (0,0), (-1,-1), 1),
+                    ("FONTSIZE", (0,0), (-1,-1), 8),
+                    ("LEFTPADDING", (0,0), (-1,-1), 2),
+                    ("RIGHTPADDING", (0,0), (-1,-1), 2),
                 ]
 
                 # Rellenar filas de alumnos
@@ -1669,14 +1667,14 @@ if rol == "admin":
                     fila = [alu["nombre"]]
                     faltas_alu = 0
                     
-                    for d in range(1, dias_mes+1):
+                    for col_idx, d in enumerate(dias_lectivos, start=1):
                         f_check = f"{año_f}-{mes_f:02d}-{d:02d}"
                         if (id_alu_str, f_check) in faltas_set:
                             fila.append("F")
                             faltas_alu += 1
-                            # Color rojo para la 'F'
-                            estilos.append(('TEXTCOLOR', (d, fila_idx + 1), (d, fila_idx + 1), colors.red))
-                            estilos.append(('FONTNAME', (d, fila_idx + 1), (d, fila_idx + 1), "Helvetica-Bold"))
+                            # Usamos col_idx (posición real en la tabla) en lugar de d
+                            estilos.append(('TEXTCOLOR', (col_idx, fila_idx + 1), (col_idx, fila_idx + 1), colors.red))
+                            estilos.append(('FONTNAME', (col_idx, fila_idx + 1), (col_idx, fila_idx + 1), "Helvetica-Bold"))
                         else:
                             fila.append("")
                     
@@ -1687,25 +1685,22 @@ if rol == "admin":
                     if (fila_idx + 1) % 2 == 0:
                         estilos.append(("BACKGROUND", (0, fila_idx + 1), (-1, fila_idx + 1), colors.whitesmoke))
 
-                # Fila de total inferior
-                idx_total = len(tabla_data)
-                fila_total = ["TOTAL FALTAS DEL CURSO"] + [""] * dias_mes + [total_faltas_curso]
+                # Fila de total inferior ajustada a num_dias_lectivos
+                fila_total = ["TOTAL FALTAS DEL CURSO"] + [""] * num_dias_lectivos + [total_faltas_curso]
                 tabla_data.append(fila_total)
                 
                 estilos.append(("BACKGROUND", (0, -1), (-1, -1), colors.lightgrey))
                 estilos.append(("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"))
-                estilos.append(("SPAN", (0, -1), (dias_mes, -1)))
+                estilos.append(("SPAN", (0, -1), (num_dias_lectivos, -1)))
                 estilos.append(("ALIGN", (0, -1), (0, -1), "RIGHT"))
 
-                # Dibujar tabla
-                # Ajuste de anchos para que no se salga del papel
-                anchos_dias = (page_width - 200) / dias_mes
-                tabla = Table(tabla_data, colWidths=[120] + [anchos_dias]*dias_mes + [25])
+                # Dibujar tabla usando num_dias_lectivos
+                anchos_dias = (page_width - 200) / num_dias_lectivos
+                tabla = Table(tabla_data, colWidths=[125] + [anchos_dias]*num_dias_lectivos + [30])
                 tabla.setStyle(TableStyle(estilos))
                 
-                # --- BUSCA LA LÍNEA tabla.drawOn Y CÁMBIALA POR ESTA ---
                 w, h = tabla.wrap(0, 0)
-                x_centered = (page_width - w) / 2  # Calcula el centro exacto
+                x_centered = (page_width - w) / 2
                 tabla.drawOn(c, x_centered, page_height - 160 - h)
                 add_page_number(c)
 
@@ -1718,7 +1713,6 @@ if rol == "admin":
                 mime="application/pdf",
                 use_container_width=True
             )
-
         # # =========================
         # # INFORME INDIVIDUAL (FACTURA)
         # # =========================

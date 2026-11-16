@@ -316,18 +316,12 @@ if rol == "cocina" and st.session_state.informes == "📊 Informe de situación 
     # Fecha de hoy
     fecha_hoy = datetime.now().strftime("%Y-%m-%d")
 
-    # Filtrar asistencia de hoy
-    df_hoy = df_asistencia[
+    # Consultamos quiénes tienen FALTA hoy
+    df_faltas_hoy = df_asistencia[
         (df_asistencia["fecha"] == fecha_hoy) &
-        (df_asistencia["asiste"] == True)
+        (df_asistencia["asiste"] == False)
     ]
-
-    if df_hoy.empty:
-        st.warning("No hay alumnos registrados hoy en el comedor.")
-        st.stop()
-
-    # IDs de alumnos que asisten hoy
-    ids_hoy = df_hoy["alumno_id"].astype(int).tolist()
+    ids_faltan_hoy = df_faltas_hoy["alumno_id"].astype(int).tolist() if not df_faltas_hoy.empty else []
 
     # Unir alumnos con cursos
     df_cursos_ren = df_cursos.rename(columns={"nombre": "nombre_curso"})
@@ -338,8 +332,8 @@ if rol == "cocina" and st.session_state.informes == "📊 Informe de situación 
         suffixes=("", "_c")
     )
 
-    # Filtrar solo alumnos que asisten hoy
-    df_alumnos_hoy = df_alumnos_full[df_alumnos_full["id"].isin(ids_hoy)]
+    # Todos los alumnos excepto los que faltan hoy
+    df_alumnos_hoy = df_alumnos_full[~df_alumnos_full["id"].isin(ids_faltan_hoy)]
 
     # Preparar listas por fila
     m1 = df_alumnos_hoy[df_alumnos_hoy["id"].isin(df_config[df_config["fila"] == 1]["id_alumno"])]
@@ -653,10 +647,8 @@ if rol == "admin":
             )
 
             if st.form_submit_button("Guardar"):
-                # Normalizar nombre (evitar mayúsculas/minúsculas y espacios)
                 nombre_normalizado = nombre.strip().lower()
 
-                # Comprobar si ya existe un alumno con ese nombre
                 existe = df_alumnos[
                     df_alumnos["nombre"].str.strip().str.lower() == nombre_normalizado
                 ]
@@ -665,11 +657,23 @@ if rol == "admin":
                     st.error("Este alumno ya está registrado en la base de datos.")
                     st.stop()
     
-                # Insertar alumno si no existe
-                db_insert("alumnos", [{
+                # 1. Insertar alumno y recuperar su nuevo ID
+                res_nuevo = supabase.table("alumnos").insert([{
                     "nombre": nombre.strip(),
                     "curso_id": curso["id"]
-                }])
+                }]).execute()
+
+                # 2. Registrarle asistencia hoy automáticamente para que salga en los informes del día
+                if res_nuevo.data:
+                    nuevo_id = int(res_nuevo.data[0]["id"])
+                    fecha_hoy_reg = datetime.now().strftime("%Y-%m-%d")
+                    supabase.table("asistencia").insert([{
+                        "fecha": fecha_hoy_reg,
+                        "alumno_id": nuevo_id,
+                        "curso_id": int(curso["id"]),
+                        "asiste": True,
+                        "motivo": ""
+                    }]).execute()
 
                 st.success("Alumno añadido correctamente")
                 st.rerun()
@@ -1272,20 +1276,18 @@ if rol == "admin":
         with c_btn2:
             if st.button("🖨️ Generar PDF de Situación", type="primary", use_container_width=True):
                 fecha_hoy_str = datetime.now().strftime("%Y-%m-%d")
-                res_asis = supabase.table("asistencia").select("alumno_id").eq("fecha", fecha_hoy_str).eq("asiste", True).execute()
-                ids_asisten_hoy = {int(r["alumno_id"]) for r in res_asis.data}
+                
+                # Excluimos solo a los que tienen FALTA hoy (asiste = False)
+                res_faltas = supabase.table("asistencia").select("alumno_id").eq("fecha", fecha_hoy_str).eq("asiste", False).execute()
+                ids_faltan_hoy = {int(r["alumno_id"]) for r in res_faltas.data}
 
                 if not any([m1_sel, m2_sel, m3_sel]):
-                    st.error("Asigna alumnos a las mesas primero y pulsa Guardar Cambios.")
+                    st.error("Asigna alumnos a las mesas primero.")
                 else:
-                    if not ids_asisten_hoy:
-                        st.warning("No hay asistencia marcada hoy. Mostrando todos los asignados.")
-                        ids_asisten_hoy = {int(a["id"]) for a in (m1_sel + m2_sel + m3_sel)} 
-
-                    m1_pdf = [a for a in m1_sel if int(a["id"]) in ids_asisten_hoy]
-                    m2_pdf = [a for a in m2_sel if int(a["id"]) in ids_asisten_hoy]
-                    m3_pdf = [a for a in m3_sel if int(a["id"]) in ids_asisten_hoy]
-
+                    m1_pdf = [a for a in m1_sel if int(a["id"]) not in ids_faltan_hoy]
+                    m2_pdf = [a for a in m2_sel if int(a["id"]) not in ids_faltan_hoy]
+                    m3_pdf = [a for a in m3_sel if int(a["id"]) not in ids_faltan_hoy]
+                    
                     buffer = io.BytesIO()
                     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=30, leftMargin=30, topMargin=40, bottomMargin=30)
                     elementos = []
@@ -1374,7 +1376,6 @@ if rol == "admin":
                 res_asis = supabase.table("asistencia").select("*").eq("fecha", fecha_curso_str).execute()
                 df_dia_fresco = pd.DataFrame(res_asis.data)
 
-            # Diccionario de asistencia del día: {id_alumno: True/False}
             dict_asistencia_dia = {}
             if not df_dia_fresco.empty:
                 dict_asistencia_dia = {
@@ -1396,7 +1397,6 @@ if rol == "admin":
                 nombre_curso = curso["nombre"]
                 id_curso_target = str(curso["id"])
 
-                # Partimos de TODOS los alumnos matriculados actualmente en este curso
                 alumnos_del_curso = df_alumnos_fresco[df_alumnos_fresco["curso_id"].astype(str) == id_curso_target]
 
                 filas_curso = []
@@ -1405,7 +1405,7 @@ if rol == "admin":
                     if id_alu in dict_asistencia_dia:
                         estado = "Sí" if dict_asistencia_dia[id_alu] else "No"
                     else:
-                        estado = "Sin registrar"
+                        estado = "Sí"
                     filas_curso.append([alu["nombre"], estado])
                 
                 if not filas_curso and curso_sel == "Todos los cursos":
@@ -1452,7 +1452,7 @@ if rol == "admin":
                 mime="application/pdf",
                 use_container_width=True
             )
-    
+            
         # =========================
         # INFORME MENSUAL (CARGA TOTAL FORZADA - SOLO DÍAS LECTIVOS)
         # =========================

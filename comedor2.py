@@ -1189,7 +1189,7 @@ if rol == "admin":
         st.info("Configura la distribución de los alumnos. Esta configuración se guarda permanentemente.")
 
         # 1. CARGA DE DATOS FRESCOS
-        st.cache_data.clear() # Limpiamos para asegurar datos reales
+        st.cache_data.clear()
         df_cursos = db_select("cursos")
         df_alumnos = db_select("alumnos")
         
@@ -1199,29 +1199,30 @@ if rol == "admin":
             df_config_prev = pd.DataFrame()
 
         # --- MAPEO ROBUSTO (SIN MERGES) ---
-        # Creamos diccionarios para evitar el error de columnas inexistentes
         dict_nombres_curso = {str(k): str(v) for k, v in zip(df_cursos["id"], df_cursos["nombre"])}
         
-        # Preparamos la lista de alumnos con su nombre de curso ya integrado
         lista_alumnos_procesada = []
         for _, alu in df_alumnos.iterrows():
             id_cur = str(alu["curso_id"])
-            nombre_c = dict_nombres_curso.get(id_cur, id_cur) # Si no hay ID, usa el valor (por si ya es nombre)
+            nombre_c = dict_nombres_curso.get(id_cur, id_cur)
             lista_alumnos_procesada.append({
-                "id": alu["id"],
+                "id": int(alu["id"]),
                 "nombre": alu["nombre"],
                 "nombre_curso": nombre_c,
                 "curso_id": alu["curso_id"]
             })
         
         df_alumnos_full = pd.DataFrame(lista_alumnos_procesada)
-        df_alumnos_full = df_alumnos_full.sort_values(by="nombre_curso")
+        if not df_alumnos_full.empty:
+            df_alumnos_full = df_alumnos_full.sort_values(by=["nombre_curso", "nombre"])
 
-        # --- FUNCIÓN DE DEFAULTS ---
+        # --- FUNCIÓN DE DEFAULTS (NORMALIZANDO A INT) ---
         def obtener_defaults(fila_num):
             if df_config_prev is not None and not df_config_prev.empty:
                 if "fila" in df_config_prev.columns and "id_alumno" in df_config_prev.columns:
-                    ids_en_fila = df_config_prev[df_config_prev["fila"] == fila_num]["id_alumno"].tolist()
+                    ids_en_fila = [
+                        int(x) for x in df_config_prev[df_config_prev["fila"].astype(int) == fila_num]["id_alumno"].dropna().tolist()
+                    ]
                     seleccionados = df_alumnos_full[df_alumnos_full["id"].isin(ids_en_fila)]
                     return seleccionados.to_dict('records')
             return []
@@ -1254,50 +1255,46 @@ if rol == "admin":
         with c_btn1:
             if st.button("💾 Guardar Cambios de Mesa", use_container_width=True):
                 try:
-                    supabase.table("config_mesas").delete().neq("id", -1).execute() 
+                    # Borramos usando fila > 0 para evitar errores si la tabla no tiene columna 'id'
+                    supabase.table("config_mesas").delete().gt("fila", 0).execute() 
                     nuevos_reg = []
-                    for a in m1_sel: nuevos_reg.append({"id_alumno": a["id"], "fila": 1})
-                    for a in m2_sel: nuevos_reg.append({"id_alumno": a["id"], "fila": 2})
-                    for a in m3_sel: nuevos_reg.append({"id_alumno": a["id"], "fila": 3})
+                    for a in m1_sel: nuevos_reg.append({"id_alumno": int(a["id"]), "fila": 1})
+                    for a in m2_sel: nuevos_reg.append({"id_alumno": int(a["id"]), "fila": 2})
+                    for a in m3_sel: nuevos_reg.append({"id_alumno": int(a["id"]), "fila": 3})
                     
                     if nuevos_reg:
                         db_insert("config_mesas", nuevos_reg)
-                        st.success("Configuración guardada.")
-                        st.rerun()
+                    st.success("Configuración guardada correctamente.")
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Error al guardar: {e}")
 
         with c_btn2:
             if st.button("🖨️ Generar PDF de Situación", type="primary", use_container_width=True):
-                # OBTENER ASISTENCIA REAL DE HOY (CARGA DIRECTA)
                 fecha_hoy_str = datetime.now().strftime("%Y-%m-%d")
                 res_asis = supabase.table("asistencia").select("alumno_id").eq("fecha", fecha_hoy_str).eq("asiste", True).execute()
-                ids_asisten_hoy = [r["alumno_id"] for r in res_asis.data]
+                ids_asisten_hoy = {int(r["alumno_id"]) for r in res_asis.data}
 
                 if not any([m1_sel, m2_sel, m3_sel]):
-                    st.error("Asigna alumnos a las mesas primero.")
+                    st.error("Asigna alumnos a las mesas primero y pulsa Guardar Cambios.")
                 else:
-                    # Si no hay nadie marcado hoy, por cortesía mostramos todos los asignados
                     if not ids_asisten_hoy:
                         st.warning("No hay asistencia marcada hoy. Mostrando todos los asignados.")
-                        ids_asisten_hoy = [a["id"] for a in (m1_sel + m2_sel + m3_sel)] 
+                        ids_asisten_hoy = {int(a["id"]) for a in (m1_sel + m2_sel + m3_sel)} 
 
-                    # Filtrar listas para el PDF
-                    m1_pdf = [a for a in m1_sel if a["id"] in ids_asisten_hoy]
-                    m2_pdf = [a for a in m2_sel if a["id"] in ids_asisten_hoy]
-                    m3_pdf = [a for a in m3_sel if a["id"] in ids_asisten_hoy]
+                    m1_pdf = [a for a in m1_sel if int(a["id"]) in ids_asisten_hoy]
+                    m2_pdf = [a for a in m2_sel if int(a["id"]) in ids_asisten_hoy]
+                    m3_pdf = [a for a in m3_sel if int(a["id"]) in ids_asisten_hoy]
 
                     buffer = io.BytesIO()
                     doc = SimpleDocTemplate(buffer, pagesize=landscape(A4), rightMargin=30, leftMargin=30, topMargin=40, bottomMargin=30)
                     elementos = []
                     estilos_p = getSampleStyleSheet()
 
-                    # Título
                     titulo = f"SITUACIÓN EN MESA - {datetime.now().strftime('%d/%m/%Y')}"
                     elementos.append(Paragraph(f"<b>{titulo}</b>", estilos_p['Title']))
                     elementos.append(Spacer(1, 15))
 
-                    # Tabla
                     max_filas = max(len(m1_pdf), len(m2_pdf), len(m3_pdf))
                     tabla_data = [["INFANTIL", "MEDIANOS", "GRANDES"]]
                     
@@ -1319,21 +1316,15 @@ if rol == "admin":
                                 alu = lista[i]
                                 nombre = alu['nombre']
                                 curso = alu['nombre_curso']
-                                
-                                # Color por etapa (Infantil, Primaria...)
                                 _, color_base = obtener_info_etapa(curso)
-                                
-                                # Alerta Alergia
                                 if nombre in alertas_gluten:
                                     color_base = colors.orange
-                                
                                 fila_cont.append(f"{nombre}\n({curso})")
                                 estilos_tabla.append(("BACKGROUND", (col_idx, i+1), (col_idx, i+1), color_base))
                             else:
                                 fila_cont.append("")
                         tabla_data.append(fila_cont)
 
-                    # Subtotales
                     tabla_data.append([f"Total: {len(m1_pdf)}", f"Total: {len(m2_pdf)}", f"Total: {len(m3_pdf)}"])
                     idx_last = len(tabla_data) - 1
                     estilos_tabla.append(("BACKGROUND", (0, idx_last), (-1, idx_last), colors.lightgrey))
@@ -1344,16 +1335,15 @@ if rol == "admin":
                     t_mesas.setStyle(TableStyle(estilos_tabla))
                     elementos.append(t_mesas)
 
-                    # Total Final
                     elementos.append(Spacer(1, 20))
                     total_hoy = len(m1_pdf) + len(m2_pdf) + len(m3_pdf)
                     elementos.append(Paragraph(f"<para align='right' size='14'><b>TOTAL COMENSALES: <font color='blue'>{total_hoy}</font></b></para>", estilos_p['Normal']))
 
-                    def add_page_number(canvas, doc):
-                        canvas.setFont("Helvetica", 9)
-                        canvas.drawRightString(landscape(A4)[0] - 30, 20, f"Página {canvas.getPageNumber()}")
+                    def add_page_number_mesas(canvas_obj, doc_obj):
+                        canvas_obj.setFont("Helvetica", 9)
+                        canvas_obj.drawRightString(landscape(A4)[0] - 30, 20, f"Página {canvas_obj.getPageNumber()}")
 
-                    doc.build(elementos, onFirstPage=add_page_number, onLaterPages=add_page_number)
+                    doc.build(elementos, onFirstPage=add_page_number_mesas, onLaterPages=add_page_number_mesas)
                     
                     st.download_button(
                         "📩 Descargar PDF de Situación", 
@@ -1379,93 +1369,89 @@ if rol == "admin":
 
         if st.button("Generar PDF por Curso", type="primary"):
             with st.spinner("Actualizando datos..."):
-                # PASO 1: Forzamos lectura fresca de la DB
                 df_alumnos_fresco = db_select("alumnos")
                 df_cursos_fresco = db_select("cursos")
-                # Traemos la asistencia de ese día específico directamente
                 res_asis = supabase.table("asistencia").select("*").eq("fecha", fecha_curso_str).execute()
                 df_dia_fresco = pd.DataFrame(res_asis.data)
 
-            if df_dia_fresco.empty:
-                st.warning(f"No hay registros de asistencia para el día {fecha_curso.strftime('%d/%m/%Y')}")
+            # Diccionario de asistencia del día: {id_alumno: True/False}
+            dict_asistencia_dia = {}
+            if not df_dia_fresco.empty:
+                dict_asistencia_dia = {
+                    str(row["alumno_id"]): bool(row["asiste"])
+                    for _, row in df_dia_fresco.iterrows()
+                }
+
+            if curso_sel == "Todos los cursos":
+                cursos_a_procesar = df_cursos_fresco[df_cursos_fresco["nombre"].str.lower() != "ninguno"].to_dict(orient="records")
             else:
-                # PASO 2: Preparar mapeos con datos frescos
-                # Usamos diccionarios para que la búsqueda sea instantánea
-                dict_alu_curso = {str(k): str(v) for k, v in zip(df_alumnos_fresco["id"], df_alumnos_fresco["curso_id"])}
-                dict_nombres_alu = {str(k): str(v) for k, v in zip(df_alumnos_fresco["id"], df_alumnos_fresco["nombre"])}
+                cursos_a_procesar = df_cursos_fresco[df_cursos_fresco["nombre"] == curso_sel].to_dict(orient="records")
+
+            buffer = io.BytesIO()
+            c = canvas.Canvas(buffer, pagesize=A4)
+            page_width, page_height = A4
+            primera_pagina = True 
+            
+            for curso in cursos_a_procesar:
+                nombre_curso = curso["nombre"]
+                id_curso_target = str(curso["id"])
+
+                # Partimos de TODOS los alumnos matriculados actualmente en este curso
+                alumnos_del_curso = df_alumnos_fresco[df_alumnos_fresco["curso_id"].astype(str) == id_curso_target]
+
+                filas_curso = []
+                for _, alu in alumnos_del_curso.iterrows():
+                    id_alu = str(alu["id"])
+                    if id_alu in dict_asistencia_dia:
+                        estado = "Sí" if dict_asistencia_dia[id_alu] else "No"
+                    else:
+                        estado = "Sin registrar"
+                    filas_curso.append([alu["nombre"], estado])
                 
-                # Definir qué cursos procesar
-                if curso_sel == "Todos los cursos":
-                    cursos_a_procesar = df_cursos_fresco[df_cursos_fresco["nombre"].str.lower() != "ninguno"].to_dict(orient="records")
-                else:
-                    cursos_a_procesar = df_cursos_fresco[df_cursos_fresco["nombre"] == curso_sel].to_dict(orient="records")
+                if not filas_curso and curso_sel == "Todos los cursos":
+                    continue
 
-                buffer = io.BytesIO()
-                c = canvas.Canvas(buffer, pagesize=A4)
-                page_width, page_height = A4
-                primera_pagina = True 
-                
-                for curso in cursos_a_procesar:
-                    nombre_curso = curso["nombre"]
-                    id_curso_target = str(curso["id"])
+                if not primera_pagina: 
+                    c.showPage() 
+                primera_pagina = False
 
-                    # Filtrar alumnos de este curso en la asistencia de hoy
-                    filas_curso = []
-                    for _, row in df_dia_fresco.iterrows():
-                        id_alu = str(row["alumno_id"])
-                        # Verificamos si el alumno de esta fila de asistencia pertenece al curso actual
-                        if dict_alu_curso.get(id_alu) == id_curso_target:
-                            filas_curso.append([
-                                dict_nombres_alu.get(id_alu, "Desconocido"),
-                                "Sí" if row["asiste"] else "No"
-                            ])
-                    
-                    # Si el curso no tiene alumnos hoy, y seleccionamos "Todos", saltamos página vacía
-                    if not filas_curso and curso_sel == "Todos los cursos":
-                        continue
+                draw_logo_centered(c, page_width, page_height - 190)
 
-                    if not primera_pagina: 
-                        c.showPage() 
-                    primera_pagina = False
+                c.setFont("Helvetica-Bold", 18)
+                c.drawCentredString(page_width/2, 750, f"Informe por Curso - {nombre_curso}")
+                c.setFont("Helvetica", 12)
+                c.drawCentredString(page_width/2, 720, f"Fecha: {fecha_curso.strftime('%d/%m/%Y')}")
 
-                    draw_logo_centered(c, page_width, page_height - 190)
+                tabla_data = [["Alumno", "Asiste"]]
+                filas_curso.sort(key=lambda x: x[0])
+                tabla_data.extend(filas_curso if filas_curso else [["Sin alumnos registrados", "-"]])
 
-                    c.setFont("Helvetica-Bold", 18)
-                    c.drawCentredString(page_width/2, 750, f"Informe por Curso - {nombre_curso}")
-                    c.setFont("Helvetica", 12)
-                    c.drawCentredString(page_width/2, 720, f"Fecha: {fecha_curso.strftime('%d/%m/%Y')}")
+                anchos = [300, 100]
+                x_centrada = (page_width - sum(anchos)) / 2
+                tabla = Table(tabla_data, colWidths=anchos)
+                tabla.setStyle(TableStyle([
+                    ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
+                    ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
+                    ("ALIGN", (0,0), (-1,-1), "CENTER"),
+                    ("ALIGN", (0,0), (0,-1), "LEFT"),
+                    ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
+                    ("LEFTPADDING", (0,0), (0,-1), 15),
+                    ("FONTSIZE", (0,0), (-1,-1), 11),
+                ]))
 
-                    # Tabla
-                    tabla_data = [["Alumno", "Asiste"]]
-                    filas_curso.sort(key=lambda x: x[0]) # Orden alfabético
-                    tabla_data.extend(filas_curso if filas_curso else [["Sin alumnos registrados", "-"]])
+                w, h = tabla.wrap(page_width, page_height)
+                tabla.drawOn(c, x_centrada, 680 - h)
+                add_page_number(c)
 
-                    anchos = [300, 100]
-                    x_centrada = (page_width - sum(anchos)) / 2
-                    tabla = Table(tabla_data, colWidths=anchos)
-                    tabla.setStyle(TableStyle([
-                        ("BACKGROUND", (0,0), (-1,0), colors.lightgrey),
-                        ("GRID", (0,0), (-1,-1), 0.5, colors.grey),
-                        ("ALIGN", (0,0), (-1,-1), "CENTER"),
-                        ("ALIGN", (0,0), (0,-1), "LEFT"),
-                        ("FONTNAME", (0,0), (-1,0), "Helvetica-Bold"),
-                        ("LEFTPADDING", (0,0), (0,-1), 15),
-                        ("FONTSIZE", (0,0), (-1,-1), 11),
-                    ]))
-
-                    w, h = tabla.wrap(page_width, page_height)
-                    tabla.drawOn(c, x_centrada, 680 - h)
-                    add_page_number(c)
-
-                c.save()
-                st.success("PDF generado con datos actualizados.")
-                st.download_button(
-                    label="📥 Descargar PDF por Curso",
-                    data=buffer.getvalue(),
-                    file_name=f"informe_{curso_sel}_{fecha_curso_str}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
+            c.save()
+            st.success("PDF generado con datos actualizados.")
+            st.download_button(
+                label="📥 Descargar PDF por Curso",
+                data=buffer.getvalue(),
+                file_name=f"informe_{curso_sel}_{fecha_curso_str}.pdf",
+                mime="application/pdf",
+                use_container_width=True
+            )
     
         # =========================
         # INFORME MENSUAL (CARGA TOTAL FORZADA - SOLO DÍAS LECTIVOS)
